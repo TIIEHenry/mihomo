@@ -180,12 +180,13 @@ func ReCreateSocks(port int, tunnel C.Tunnel) {
 		return
 	}
 
-	tcpListener, err := socks.New(addr, tunnel)
+	assoc := socks.NewUDPAssoc()
+	tcpListener, err := socks.New(addr, tunnel, assoc)
 	if err != nil {
 		return
 	}
 
-	udpListener, err := socks.NewUDP(addr, tunnel)
+	udpListener, err := socks.NewUDP(addr, tunnel, assoc)
 	if err != nil {
 		tcpListener.Close()
 		return
@@ -210,34 +211,47 @@ func ReCreateRedir(port int, tunnel C.Tunnel) {
 
 	addr := genAddr(bindAddress, port, allowLan)
 
+	shouldTCPIgnore := false
+	shouldUDPIgnore := false
+
 	if redirListener != nil {
-		if redirListener.RawAddress() == addr {
-			return
+		if redirListener.RawAddress() != addr {
+			redirListener.Close()
+			redirListener = nil
+		} else {
+			shouldTCPIgnore = true
 		}
-		redirListener.Close()
-		redirListener = nil
 	}
 
 	if redirUDPListener != nil {
-		if redirUDPListener.RawAddress() == addr {
-			return
+		if redirUDPListener.RawAddress() != addr {
+			redirUDPListener.Close()
+			redirUDPListener = nil
+		} else {
+			shouldUDPIgnore = true
 		}
-		redirUDPListener.Close()
-		redirUDPListener = nil
+	}
+
+	if shouldTCPIgnore && shouldUDPIgnore {
+		return
 	}
 
 	if portIsZero(addr) {
 		return
 	}
 
-	redirListener, err = redir.New(addr, tunnel)
-	if err != nil {
-		return
+	if !shouldTCPIgnore {
+		redirListener, err = redir.New(addr, tunnel)
+		if err != nil {
+			return
+		}
 	}
 
-	redirUDPListener, err = tproxy.NewUDP(addr, tunnel)
-	if err != nil {
-		log.Warnln("Failed to start Redir UDP Listener: %s", err)
+	if !shouldUDPIgnore {
+		redirUDPListener, err = tproxy.NewUDP(addr, tunnel)
+		if err != nil {
+			log.Warnln("Failed to start Redir UDP Listener: %s", err)
+		}
 	}
 
 	log.Infoln("Redirect proxy listening at: %s", redirListener.Address())
@@ -407,34 +421,47 @@ func ReCreateTProxy(port int, tunnel C.Tunnel) {
 
 	addr := genAddr(bindAddress, port, allowLan)
 
+	shouldTCPIgnore := false
+	shouldUDPIgnore := false
+
 	if tproxyListener != nil {
-		if tproxyListener.RawAddress() == addr {
-			return
+		if tproxyListener.RawAddress() != addr {
+			tproxyListener.Close()
+			tproxyListener = nil
+		} else {
+			shouldTCPIgnore = true
 		}
-		tproxyListener.Close()
-		tproxyListener = nil
 	}
 
 	if tproxyUDPListener != nil {
-		if tproxyUDPListener.RawAddress() == addr {
-			return
+		if tproxyUDPListener.RawAddress() != addr {
+			tproxyUDPListener.Close()
+			tproxyUDPListener = nil
+		} else {
+			shouldUDPIgnore = true
 		}
-		tproxyUDPListener.Close()
-		tproxyUDPListener = nil
+	}
+
+	if shouldTCPIgnore && shouldUDPIgnore {
+		return
 	}
 
 	if portIsZero(addr) {
 		return
 	}
 
-	tproxyListener, err = tproxy.New(addr, tunnel)
-	if err != nil {
-		return
+	if !shouldTCPIgnore {
+		tproxyListener, err = tproxy.New(addr, tunnel)
+		if err != nil {
+			return
+		}
 	}
 
-	tproxyUDPListener, err = tproxy.NewUDP(addr, tunnel)
-	if err != nil {
-		log.Warnln("Failed to start TProxy UDP Listener: %s", err)
+	if !shouldUDPIgnore {
+		tproxyUDPListener, err = tproxy.NewUDP(addr, tunnel)
+		if err != nil {
+			log.Warnln("Failed to start TProxy UDP Listener: %s", err)
+		}
 	}
 
 	log.Infoln("TProxy server listening at: %s", tproxyListener.Address())
@@ -481,12 +508,13 @@ func ReCreateMixed(port int, tunnel C.Tunnel) {
 		return
 	}
 
-	mixedListener, err = mixed.New(addr, tunnel)
+	assoc := socks.NewUDPAssoc()
+	mixedListener, err = mixed.New(addr, tunnel, assoc)
 	if err != nil {
 		return
 	}
 
-	mixedUDPLister, err = socks.NewUDP(addr, tunnel)
+	mixedUDPLister, err = socks.NewUDP(addr, tunnel, assoc)
 	if err != nil {
 		mixedListener.Close()
 		return
@@ -632,11 +660,13 @@ func PatchInboundListeners(newListenerMap map[string]C.InboundListener, tunnel C
 		if oldListener, ok := inboundListeners[name]; ok {
 			if !oldListener.Config().Equal(newListener.Config()) {
 				_ = oldListener.Close()
+				delete(inboundListeners, name)
 			} else {
 				continue
 			}
 		}
 		if err := newListener.Listen(tunnel); err != nil {
+			_ = newListener.Close()
 			log.Errorln("Listener %s listen err: %s", name, err.Error())
 			continue
 		}

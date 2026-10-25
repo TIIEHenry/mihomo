@@ -109,8 +109,14 @@ func ConvertsV2Ray(buf []byte) ([]map[string]any, error) {
 				if auth := query.Get("auth"); auth != "" {
 					hysteria2["password"] = auth
 				}
-			} else if auth := urlHysteria2.User.String(); auth != "" {
-				hysteria2["password"] = auth
+			} else if user := urlHysteria2.User; user != nil {
+				password := user.Username()
+				if pass, ok := user.Password(); ok {
+					password += ":" + pass
+				}
+				if password != "" {
+					hysteria2["password"] = password
+				}
 			}
 
 			proxies = append(proxies, hysteria2)
@@ -561,16 +567,19 @@ func ConvertsV2Ray(buf []byte) ([]map[string]any, error) {
 				remarks = fmt.Sprintf("%s:%s", server, portStr)
 			}
 			name := uniqueName(names, remarks)
-			encodeStr := link.User.String()
 			var username, password string
-			if encodeStr != "" {
-				decodeStr := string(DecodeBase64([]byte(encodeStr)))
-				splitStr := strings.Split(decodeStr, ":")
-
-				// todo: should use url.QueryUnescape ?
-				username = splitStr[0]
-				if len(splitStr) == 2 {
-					password = splitStr[1]
+			if user := link.User; user != nil {
+				if pass, ok := user.Password(); ok {
+					username = user.Username()
+					password = pass
+				} else if userName := user.Username(); userName != "" {
+					parts := strings.Split(string(DecodeBase64([]byte(userName))), ":")
+					if len(parts) == 2 && parts[0] != "" && parts[1] != "" {
+						username = parts[0]
+						password = parts[1]
+					} else {
+						username = userName
+					}
 				}
 			}
 			socks := make(map[string]any, 10)
@@ -718,12 +727,17 @@ func ConvertsV2Ray(buf []byte) ([]map[string]any, error) {
 
 func uniqueName(names map[string]int, name string) string {
 	if index, ok := names[name]; ok {
-		index++
-		names[name] = index
-		name = fmt.Sprintf("%s-%02d", name, index)
-	} else {
-		index = 0
-		names[name] = index
+		for {
+			index++
+			candidate := fmt.Sprintf("%s-%02d", name, index)
+			if _, exists := names[candidate]; exists {
+				continue
+			}
+			names[name] = index
+			names[candidate] = 0
+			return candidate
+		}
 	}
+	names[name] = 0
 	return name
 }

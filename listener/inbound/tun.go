@@ -175,7 +175,10 @@ func (t *Tun) Listen(tunnel C.Tunnel) error {
 
 // Close implements constant.InboundListener
 func (t *Tun) Close() error {
-	return t.l.Close()
+	if t.l != nil {
+		return t.l.Close()
+	}
+	return nil
 }
 
 var _ C.InboundListener = (*Tun)(nil)

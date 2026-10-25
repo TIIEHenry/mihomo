@@ -43,7 +43,6 @@ func HandleConn(c net.Conn, tunnel C.Tunnel, store auth.AuthStore, additions ...
 	conn := N.NewBufferedConn(c)
 
 	authenticator := store.Authenticator()
-	trusted := authenticator == nil // disable authenticate if lru is nil
 	lastUser := ""
 
 	for {
@@ -59,12 +58,9 @@ func HandleConn(c net.Conn, tunnel C.Tunnel, store auth.AuthStore, additions ...
 		keepAlive := strings.TrimSpace(strings.ToLower(request.Header.Get("Proxy-Connection"))) == "keep-alive"
 
 		resp, user := authenticate(request, authenticator) // always call authenticate function to get user
-		if resp == nil {
-			trusted = true
-		}
 		additions[inUserIdx] = inbound.WithInUser(user)
 
-		if trusted {
+		if resp == nil {
 			if request.Method == http.MethodConnect {
 				// Manual writing to support CONNECT for http 1.0 (workaround for uplay client)
 				if _, err = fmt.Fprintf(conn, "HTTP/%d.%d %03d %s\r\n\r\n", request.ProtoMajor, request.ProtoMinor, http.StatusOK, "Connection established"); err != nil {

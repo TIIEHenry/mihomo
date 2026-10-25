@@ -148,6 +148,7 @@ func New(config LC.AnyTLSServer, lc C.InboundListenConfig, tunnel C.Tunnel, addi
 		//TCP
 		l, err := lc.Listen(context.Background(), "tcp", addr)
 		if err != nil {
+			_ = sl.Close()
 			return nil, err
 		}
 		if shadowTLSBuilder != nil {
@@ -159,6 +160,8 @@ func New(config LC.AnyTLSServer, lc C.InboundListenConfig, tunnel C.Tunnel, addi
 		} else if tlsConfig.GetCertificate != nil {
 			l = tls.NewListener(l, tlsConfig)
 		} else if !config.AllowInsecure {
+			_ = l.Close()
+			_ = sl.Close()
 			return nil, errors.New("disallow using AnyTLS without certificates/shadow-tls/res-tls/jls/allow-insecure config")
 		}
 		sl.listeners = append(sl.listeners, l)

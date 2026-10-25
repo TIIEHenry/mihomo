@@ -402,8 +402,22 @@ func splitHysteria2Ports(line string) (string, string) {
 	if at := strings.LastIndex(auth, "@"); at >= 0 {
 		userinfo, auth = auth[:at+1], auth[at+1:]
 	}
-	if strings.Contains(auth, "]") {
-		return line, ""
+	if bracket := strings.LastIndex(auth, "]"); bracket >= 0 {
+		if bracket+1 >= len(auth) || auth[bracket+1] != ':' {
+			return line, ""
+		}
+		host, ports := auth[:bracket+1], auth[bracket+2:]
+		if !strings.ContainsAny(ports, ",-") {
+			return line, ""
+		}
+		first := ports
+		if k := strings.IndexAny(ports, ",-"); k >= 0 {
+			first = ports[:k]
+		}
+		if first == "" {
+			return line, ""
+		}
+		return head + userinfo + host + ":" + first + tail, ports
 	}
 	colon := strings.LastIndex(auth, ":")
 	if colon < 0 {

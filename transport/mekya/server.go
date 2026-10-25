@@ -285,8 +285,6 @@ func (s *serverSession) Write(p []byte) (int, error) {
 		return 0, s.ctx.Err()
 	case s.writerChan <- packet:
 		return len(p), nil
-	default:
-		return len(p), nil
 	}
 }
 

@@ -45,18 +45,29 @@ func (w *Writer) Write(p []byte) (n int, err error) {
 		return
 	}
 
-	for nr := 0; n < len(p) && err == nil; n += nr {
-		nr = payloadSizeMask
+	for n < len(p) {
+		nr := payloadSizeMask
 		if n+nr > len(p) {
 			nr = len(p) - n
 		}
 		buf = buf[:off+nr+tag]
 		buf[0], buf[1] = byte(nr>>8), byte(nr) // big-endian payload size
+		var next [32]byte
+		copy(next[:], nonce)
+		increment(next[:len(nonce)])
 		w.Seal(buf[:0], nonce, buf[:2], nil)
+		w.Seal(buf[:off], next[:len(nonce)], p[n:n+nr], nil)
+		var nw int
+		nw, err = w.Writer.Write(buf)
+		if nw != len(buf) || err != nil {
+			if err == nil {
+				err = io.ErrShortWrite
+			}
+			return
+		}
 		increment(nonce)
-		w.Seal(buf[:off], nonce, p[n:n+nr], nil)
 		increment(nonce)
-		_, err = w.Writer.Write(buf)
+		n += nr
 	}
 	return
 }

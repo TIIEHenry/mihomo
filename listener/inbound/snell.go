@@ -91,7 +91,10 @@ func (s *Snell) Listen(tunnel C.Tunnel) error {
 }
 
 func (s *Snell) Close() error {
-	return s.l.Close()
+	if s.l != nil {
+		return s.l.Close()
+	}
+	return nil
 }
 
 var _ C.InboundListener = (*Snell)(nil)

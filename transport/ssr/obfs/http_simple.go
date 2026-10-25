@@ -3,7 +3,7 @@ package obfs
 import (
 	"bytes"
 	"encoding/hex"
-	"io"
+	"errors"
 	"net"
 	"strconv"
 	"strings"
@@ -55,21 +55,29 @@ func (c *httpConn) Read(b []byte) (int, error) {
 
 	buf := pool.Get(pool.RelayBufferSize)
 	defer pool.Put(buf)
-	n, err := c.Conn.Read(buf)
-	if err != nil {
-		return 0, err
+	total := 0
+	for {
+		n, err := c.Conn.Read(buf[total:])
+		if n > 0 {
+			total += n
+			pos := bytes.Index(buf[:total], []byte("\r\n\r\n"))
+			if pos != -1 {
+				c.hasRecvHeader = true
+				dataLength := total - pos - 4
+				n = copy(b, buf[4+pos:total])
+				if dataLength > n {
+					c.buf = append(c.buf, buf[4+pos+n:4+pos+dataLength]...)
+				}
+				return n, nil
+			}
+		}
+		if total >= pool.RelayBufferSize {
+			return 0, errors.New("http_simple header too long")
+		}
+		if err != nil {
+			return 0, err
+		}
 	}
-	pos := bytes.Index(buf[:n], []byte("\r\n\r\n"))
-	if pos == -1 {
-		return 0, io.EOF
-	}
-	c.hasRecvHeader = true
-	dataLength := n - pos - 4
-	n = copy(b, buf[4+pos:n])
-	if dataLength > n {
-		c.buf = append(c.buf, buf[4+pos+n:4+pos+dataLength]...)
-	}
-	return n, nil
 }
 
 func (c *httpConn) Write(b []byte) (int, error) {

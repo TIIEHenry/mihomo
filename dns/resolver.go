@@ -102,6 +102,13 @@ func (r *Resolver) LookupIP(ctx context.Context, host string) (ips []netip.Addr,
 		ips = append(ips, ipv6s...)
 	case <-waitIPv6.C:
 		// wait ipv6 result
+		if err != nil {
+			ipv6s, open := <-ch
+			if !open {
+				return nil, resolver.ErrIPNotFound
+			}
+			return ipv6s, nil
+		}
 	}
 
 	return ips, nil

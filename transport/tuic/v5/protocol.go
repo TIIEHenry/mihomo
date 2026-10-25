@@ -563,12 +563,36 @@ func (c Address) SocksAddr() socks5.Addr {
 	return addr
 }
 
+type hostUDPAddr struct {
+	host string
+	port int
+}
+
+func (a hostUDPAddr) Network() string { return "udp" }
+
+func (a hostUDPAddr) String() string {
+	return net.JoinHostPort(a.host, strconv.Itoa(a.port))
+}
+
 func (c Address) UDPAddr() *net.UDPAddr {
+	if c.TYPE == AtypDomainName {
+		return nil
+	}
 	return &net.UDPAddr{
 		IP:   c.ADDR,
 		Port: int(c.PORT),
 		Zone: "",
 	}
+}
+
+func (c Address) netAddr() net.Addr {
+	if c.TYPE == AtypDomainName {
+		return hostUDPAddr{
+			host: string(c.ADDR[1:]),
+			port: int(c.PORT),
+		}
+	}
+	return c.UDPAddr()
 }
 
 func (c Address) BytesLen() int {

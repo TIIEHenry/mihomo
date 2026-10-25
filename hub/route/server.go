@@ -105,20 +105,20 @@ func SetUIPath(path string) {
 func router(isDebug bool, secret string, dohServer string, cors Cors) *chi.Mux {
 	r := chi.NewRouter()
 	cors.Apply(r)
-	if isDebug {
-		r.Mount("/debug", func() http.Handler {
-			r := chi.NewRouter()
-			r.Put("/gc", func(w http.ResponseWriter, r *http.Request) {
-				debug.FreeOSMemory()
-			})
-			handler := middleware.Profiler
-			r.Mount("/", handler())
-			return r
-		}())
-	}
 	r.Group(func(r chi.Router) {
 		if secret != "" {
 			r.Use(authentication(secret))
+		}
+		if isDebug {
+			r.Mount("/debug", func() http.Handler {
+				r := chi.NewRouter()
+				r.Put("/gc", func(w http.ResponseWriter, r *http.Request) {
+					debug.FreeOSMemory()
+				})
+				handler := middleware.Profiler
+				r.Mount("/", handler())
+				return r
+			}())
 		}
 		r.Get("/", hello)
 		r.Get("/logs", getLogs)
@@ -283,11 +283,11 @@ func startUnix(cfg *Config) {
 			log.Errorln("External controller unix listen error: %s", err)
 			return
 		}
-		_ = os.Chmod(addr, 0o666)
+		_ = os.Chmod(addr, 0o600)
 		log.Infoln("RESTful API unix listening at: %s", l.Addr().String())
 
 		server := &http.Server{
-			Handler: router(cfg.IsDebug, "", cfg.DohServer, cfg.Cors),
+			Handler: router(cfg.IsDebug, cfg.Secret, cfg.DohServer, cfg.Cors),
 		}
 		unixServer = server
 		if err = server.Serve(l); err != nil {
@@ -318,7 +318,7 @@ func startPipe(cfg *Config) {
 		log.Infoln("RESTful API pipe listening at: %s", l.Addr().String())
 
 		server := &http.Server{
-			Handler: router(cfg.IsDebug, "", cfg.DohServer, cfg.Cors),
+			Handler: router(cfg.IsDebug, cfg.Secret, cfg.DohServer, cfg.Cors),
 		}
 		pipeServer = server
 		if err = server.Serve(l); err != nil {

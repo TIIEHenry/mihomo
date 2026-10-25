@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"os"
 	"strconv"
 	"sync"
 	"time"
@@ -45,7 +46,6 @@ type Client struct {
 
 	udpSessionMutex sync.RWMutex
 	udpSessionMap   map[uint32]chan *udpMessage
-	udpDefragger    defragger
 	hopInterval     time.Duration
 	fastOpen        bool
 }
@@ -95,8 +95,14 @@ func (c *Client) connectToServer(dialer utils.PacketDialer) error {
 		return fmt.Errorf("auth error: %s", msg)
 	}
 	// All good
-	c.udpSessionMap = make(map[uint32]chan *udpMessage)
-	go c.handleMessage(qs)
+	if c.quicSession != nil {
+		_ = c.quicSession.CloseWithError(closeErrorCodeGeneric, "")
+	}
+	sessionMap := make(map[uint32]chan *udpMessage)
+	c.udpSessionMutex.Lock()
+	c.udpSessionMap = sessionMap
+	c.udpSessionMutex.Unlock()
+	go c.handleMessage(qs, sessionMap, &defragger{})
 	c.quicSession = qs
 	return nil
 }
@@ -123,7 +129,7 @@ func (c *Client) handleControlStream(qs *quic.Conn, stream *quic.Stream) (bool, 
 	return sh.OK, sh.Message, nil
 }
 
-func (c *Client) handleMessage(qs *quic.Conn) {
+func (c *Client) handleMessage(qs *quic.Conn, sessionMap map[uint32]chan *udpMessage, df *defragger) {
 	for {
 		msg, err := qs.ReceiveDatagram(context.Background())
 		if err != nil {
@@ -134,12 +140,12 @@ func (c *Client) handleMessage(qs *quic.Conn) {
 		if err != nil {
 			continue
 		}
-		dfMsg := c.udpDefragger.Feed(udpMsg)
+		dfMsg := df.Feed(udpMsg)
 		if dfMsg == nil {
 			continue
 		}
 		c.udpSessionMutex.RLock()
-		ch, ok := c.udpSessionMap[dfMsg.SessionID]
+		ch, ok := sessionMap[dfMsg.SessionID]
 		if ok {
 			select {
 			case ch <- dfMsg:
@@ -355,6 +361,72 @@ type quicPktConn struct {
 	CloseFunc    func()
 	UDPSessionID uint32
 	MsgCh        <-chan *udpMessage
+	readDeadline pktDeadline
+}
+
+type pktDeadline struct {
+	mu     sync.Mutex
+	timer  *time.Timer
+	cancel chan struct{}
+	when   time.Time
+}
+
+func (d *pktDeadline) set(t time.Time) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.cancel == nil {
+		d.cancel = make(chan struct{})
+	}
+	if d.timer != nil && !d.timer.Stop() {
+		<-d.cancel
+	}
+	d.timer = nil
+	d.when = t
+
+	closed := isClosedChan(d.cancel)
+	if t.IsZero() {
+		if closed {
+			d.cancel = make(chan struct{})
+		}
+		return
+	}
+	if dur := time.Until(t); dur > 0 {
+		if closed {
+			d.cancel = make(chan struct{})
+		}
+		cancel := d.cancel
+		d.timer = time.AfterFunc(dur, func() {
+			close(cancel)
+		})
+		return
+	}
+	if !closed {
+		close(d.cancel)
+	}
+}
+
+func (d *pktDeadline) wait() <-chan struct{} {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.cancel == nil {
+		d.cancel = make(chan struct{})
+	}
+	return d.cancel
+}
+
+func (d *pktDeadline) exceeded() bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return !d.when.IsZero() && !time.Now().Before(d.when)
+}
+
+func isClosedChan(ch <-chan struct{}) bool {
+	select {
+	case <-ch:
+		return true
+	default:
+		return false
+	}
 }
 
 func (c *quicPktConn) Hold() {
@@ -369,13 +441,36 @@ func (c *quicPktConn) Hold() {
 	_ = c.Close()
 }
 
-func (c *quicPktConn) ReadFrom() ([]byte, string, error) {
-	msg := <-c.MsgCh
+func readUDPMessage(msg *udpMessage) ([]byte, string, error) {
 	if msg == nil {
 		// Closed
 		return nil, "", ErrClosed
 	}
 	return msg.Data, net.JoinHostPort(msg.Host, strconv.Itoa(int(msg.Port))), nil
+}
+
+func (c *quicPktConn) ReadFrom() ([]byte, string, error) {
+	for {
+		select {
+		case msg := <-c.MsgCh:
+			return readUDPMessage(msg)
+		default:
+		}
+		select {
+		case msg := <-c.MsgCh:
+			return readUDPMessage(msg)
+		case <-c.readDeadline.wait():
+			select {
+			case msg := <-c.MsgCh:
+				return readUDPMessage(msg)
+			default:
+			}
+			if !c.readDeadline.exceeded() {
+				continue
+			}
+			return nil, "", os.ErrDeadlineExceeded
+		}
+	}
 }
 
 func (c *quicPktConn) WriteTo(p []byte, addr string) error {
@@ -424,11 +519,13 @@ func (c *quicPktConn) LocalAddr() net.Addr {
 }
 
 func (c *quicPktConn) SetDeadline(t time.Time) error {
-	return c.Stream.SetDeadline(t)
+	c.readDeadline.set(t)
+	return c.Stream.SetWriteDeadline(t)
 }
 
 func (c *quicPktConn) SetReadDeadline(t time.Time) error {
-	return c.Stream.SetReadDeadline(t)
+	c.readDeadline.set(t)
+	return nil
 }
 
 func (c *quicPktConn) SetWriteDeadline(t time.Time) error {

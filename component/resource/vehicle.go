@@ -44,7 +44,26 @@ func safeWrite(path string, buf []byte) error {
 		}
 	}
 
-	return os.WriteFile(path, buf, fileMode)
+	f, err := os.CreateTemp(dir, ".tmp-*")
+	if err != nil {
+		return err
+	}
+	tmpPath := f.Name()
+	if _, err = f.Write(buf); err != nil {
+		_ = f.Close()
+		_ = os.Remove(tmpPath)
+		return err
+	}
+	_ = f.Chmod(fileMode)
+	if err = f.Close(); err != nil {
+		_ = os.Remove(tmpPath)
+		return err
+	}
+	if err = os.Rename(tmpPath, path); err != nil {
+		_ = os.Remove(tmpPath)
+		return err
+	}
+	return nil
 }
 
 type FileVehicle struct {

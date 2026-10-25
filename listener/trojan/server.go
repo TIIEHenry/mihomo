@@ -200,6 +200,7 @@ func New(config LC.TrojanServer, lc C.InboundListenConfig, tunnel C.Tunnel, addi
 		//TCP
 		l, err := lc.Listen(context.Background(), "tcp", addr)
 		if err != nil {
+			_ = sl.Close()
 			return nil, err
 		}
 		if shadowTLSBuilder != nil {
@@ -213,6 +214,8 @@ func New(config LC.TrojanServer, lc C.InboundListenConfig, tunnel C.Tunnel, addi
 		} else if tlsConfig.GetCertificate != nil {
 			l = tls.NewListener(l, tlsConfig)
 		} else if !config.TrojanSSOption.Enabled && !config.AllowInsecure {
+			_ = l.Close()
+			_ = sl.Close()
 			return nil, errors.New("disallow using Trojan without any certificates/shadow-tls/res-tls/jls/reality/ss/allow-insecure config")
 		}
 		sl.listeners = append(sl.listeners, l)

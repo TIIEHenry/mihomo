@@ -271,6 +271,10 @@ func ClientHandshake(rw io.ReadWriter, addr Addr, command Command, user *User) (
 		return nil, err
 	}
 
+	if buf[1] != 0x00 {
+		return nil, Error(buf[1])
+	}
+
 	return ReadAddr(rw, buf)
 }
 

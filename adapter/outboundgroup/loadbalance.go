@@ -32,7 +32,7 @@ type LoadBalance struct {
 	expectedStatus string
 }
 
-type strategyFn = func(proxies []C.Proxy, metadata *C.Metadata, touch bool) C.Proxy
+type strategyFn = func(proxies []C.Proxy, metadata *C.Metadata, touch bool, udp bool) C.Proxy
 
 var errStrategy = errors.New("unsupported strategy")
 var errHashKey = errors.New("unsupported hash-key")
@@ -150,13 +150,26 @@ func (lb *LoadBalance) ListenPacketContext(ctx context.Context, metadata *C.Meta
 		}
 	}()
 
-	proxy := lb.Unwrap(metadata, true)
+	proxies := lb.GetProxies(true)
+	proxy := lb.strategyFn(proxies, metadata, true, true)
+	if proxy == nil {
+		err = errors.New("no alive proxy supporting UDP")
+		return
+	}
 	return proxy.ListenPacketContext(ctx, metadata)
 }
 
 // SupportUDP implements C.ProxyAdapter
 func (lb *LoadBalance) SupportUDP() bool {
-	return !lb.disableUDP
+	if lb.disableUDP {
+		return false
+	}
+	for _, proxy := range lb.GetProxies(false) {
+		if proxy.SupportUDP() {
+			return true
+		}
+	}
+	return false
 }
 
 // IsL3Protocol implements C.ProxyAdapter
@@ -167,7 +180,7 @@ func (lb *LoadBalance) IsL3Protocol(metadata *C.Metadata) bool {
 func strategyRoundRobin(url string) strategyFn {
 	idx := 0
 	idxMutex := sync.Mutex{}
-	return func(proxies []C.Proxy, metadata *C.Metadata, touch bool) C.Proxy {
+	return func(proxies []C.Proxy, metadata *C.Metadata, touch bool, udp bool) C.Proxy {
 		idxMutex.Lock()
 		defer idxMutex.Unlock()
 
@@ -183,36 +196,42 @@ func strategyRoundRobin(url string) strategyFn {
 		for ; i < length; i++ {
 			id := (idx + i) % length
 			proxy := proxies[id]
-			if proxy.AliveForTestUrl(url) {
+			if proxy.AliveForTestUrl(url) && (!udp || proxy.SupportUDP()) {
 				i++
 				return proxy
 			}
 		}
 
+		if udp {
+			return nil
+		}
 		return proxies[0]
 	}
 }
 
 func strategyConsistentHashing(url string, keyOf keyFn) strategyFn {
 	maxRetry := 5
-	return func(proxies []C.Proxy, metadata *C.Metadata, touch bool) C.Proxy {
+	return func(proxies []C.Proxy, metadata *C.Metadata, touch bool, udp bool) C.Proxy {
 		key := utils.MapHash(keyOf(metadata))
 		buckets := int32(len(proxies))
 		for i := 0; i < maxRetry; i, key = i+1, key+1 {
 			idx := jumpHash(key, buckets)
 			proxy := proxies[idx]
-			if proxy.AliveForTestUrl(url) {
+			if proxy.AliveForTestUrl(url) && (!udp || proxy.SupportUDP()) {
 				return proxy
 			}
 		}
 
 		// when availability is poor, traverse the entire list to get the available nodes
 		for _, proxy := range proxies {
-			if proxy.AliveForTestUrl(url) {
+			if proxy.AliveForTestUrl(url) && (!udp || proxy.SupportUDP()) {
 				return proxy
 			}
 		}
 
+		if udp {
+			return nil
+		}
 		return proxies[0]
 	}
 }
@@ -223,7 +242,7 @@ func strategyStickySessions(url string, keyOf keyFn) strategyFn {
 	lruCache := lru.New[uint64, int](
 		lru.WithAge[uint64, int](int64(ttl.Seconds())),
 		lru.WithSize[uint64, int](1000))
-	return func(proxies []C.Proxy, metadata *C.Metadata, touch bool) C.Proxy {
+	return func(proxies []C.Proxy, metadata *C.Metadata, touch bool, udp bool) C.Proxy {
 		key := utils.MapHash(keyOf(metadata))
 		length := len(proxies)
 		idx, has := lruCache.Get(key)
@@ -234,8 +253,8 @@ func strategyStickySessions(url string, keyOf keyFn) strategyFn {
 		nowIdx := idx
 		for i := 1; i < maxRetry; i++ {
 			proxy := proxies[nowIdx]
-			if proxy.AliveForTestUrl(url) {
-				if !has || nowIdx != idx {
+			if proxy.AliveForTestUrl(url) && (!udp || proxy.SupportUDP()) {
+				if !udp && (!has || nowIdx != idx) {
 					lruCache.Set(key, nowIdx)
 				}
 
@@ -243,6 +262,15 @@ func strategyStickySessions(url string, keyOf keyFn) strategyFn {
 			} else {
 				nowIdx = int(jumpHash(key+uint64(time.Now().UnixNano()), int32(length)))
 			}
+		}
+
+		if udp {
+			for _, proxy := range proxies {
+				if proxy.AliveForTestUrl(url) && proxy.SupportUDP() {
+					return proxy
+				}
+			}
+			return nil
 		}
 
 		lruCache.Set(key, 0)
@@ -253,7 +281,7 @@ func strategyStickySessions(url string, keyOf keyFn) strategyFn {
 // Unwrap implements C.ProxyAdapter
 func (lb *LoadBalance) Unwrap(metadata *C.Metadata, touch bool) C.Proxy {
 	proxies := lb.GetProxies(touch)
-	return lb.strategyFn(proxies, metadata, touch)
+	return lb.strategyFn(proxies, metadata, touch, false)
 }
 
 // MarshalJSON implements C.ProxyAdapter

@@ -128,21 +128,13 @@ func (u *UIUpdater) downloadUI() error {
 		return fmt.Errorf("can't extract compressed file: %w", err)
 	}
 
-	log.Debugln("cleanupFolder: %s", u.externalUIPath)
-	err = cleanup(u.externalUIPath) // cleanup files in dir don't remove dir itself
-	if err != nil {
-		if !os.IsNotExist(err) {
-			return fmt.Errorf("cleanup exist file error: %w", err)
-		}
-	}
-
 	err = u.prepareUIPath()
 	if err != nil {
 		return fmt.Errorf("prepare UI path failed: %w", err)
 	}
 
 	log.Debugln("moveFolder from %s to %s", tmpDir, u.externalUIPath)
-	err = moveDir(tmpDir, u.externalUIPath) // move files from tmp to target
+	err = moveDir(tmpDir, u.externalUIPath)
 	if err != nil {
 		return fmt.Errorf("move UI folder failed: %w", err)
 	}
@@ -303,26 +295,60 @@ func moveDir(src string, dst string) error {
 	if len(dirEntryList) == 1 && dirEntryList[0].IsDir() {
 		src = filepath.Join(src, dirEntryList[0].Name())
 		log.Debugln("match the singleRoot: %s", src)
-		dirEntryList, err = os.ReadDir(src)
-		if err != nil {
+	}
+
+	parent := filepath.Dir(filepath.Clean(dst))
+	staging, err := os.MkdirTemp(parent, ".ui-new-*")
+	if err != nil {
+		return err
+	}
+	if err = os.Remove(staging); err != nil {
+		return err
+	}
+
+	if err = os.Rename(src, staging); err != nil {
+		// Fallback for invalid cross-device link (errno:18).
+		if !errors.Is(err, syscall.Errno(18)) {
+			return err
+		}
+		if err = copyAll(src, staging); err != nil {
+			_ = os.RemoveAll(staging)
 			return err
 		}
 	}
 
-	for _, dirEntry := range dirEntryList {
-		srcPath := filepath.Join(src, dirEntry.Name())
-		dstPath := filepath.Join(dst, dirEntry.Name())
-		err = os.Rename(srcPath, dstPath)
-		if err != nil {
-			// Fallback for invalid cross-device link (errno:18).
-			if errors.Is(err, syscall.Errno(18)) {
-				err = copyAll(srcPath, dstPath)
-				_ = os.RemoveAll(srcPath)
-			}
-		}
-		if err != nil {
+	backup, err := os.MkdirTemp(parent, ".ui-bak-*")
+	if err != nil {
+		_ = os.RemoveAll(staging)
+		return err
+	}
+	if err = os.Remove(backup); err != nil {
+		_ = os.RemoveAll(staging)
+		return err
+	}
+
+	dstExisted := true
+	if err = os.Rename(dst, backup); err != nil {
+		if !os.IsNotExist(err) {
+			_ = os.RemoveAll(staging)
 			return err
 		}
+		dstExisted = false
+	}
+
+	if err = os.Rename(staging, dst); err != nil {
+		if dstExisted {
+			if rbErr := os.Rename(backup, dst); rbErr != nil {
+				return fmt.Errorf("%v; restore UI folder: %w", err, rbErr)
+			}
+		}
+		_ = os.RemoveAll(staging)
+		return err
+	}
+
+	if dstExisted {
+		_ = cleanup(backup)
+		_ = os.RemoveAll(backup)
 	}
 	return nil
 }

@@ -167,6 +167,10 @@ func (p *Proxy) URLTest(ctx context.Context, url string, expectedStatus utils.In
 	var satisfied bool
 
 	defer func() {
+		if err == nil && !satisfied {
+			err = fmt.Errorf("unexpected status code")
+		}
+
 		alive := err == nil
 		record := C.DelayHistory{Time: time.Now()}
 		if alive {
@@ -185,11 +189,6 @@ func (p *Proxy) URLTest(ctx context.Context, url string, expectedStatus utils.In
 				alive:   atomic.NewBool(true),
 			}
 		})
-
-		if !satisfied {
-			record.Delay = 0
-			alive = false
-		}
 
 		state.alive.Store(alive)
 		state.history.Put(record)
@@ -274,6 +273,10 @@ func (p *Proxy) URLTest(ctx context.Context, url string, expectedStatus utils.In
 	}
 
 	satisfied = resp != nil && (expectedStatus == nil || expectedStatus.Check(uint16(resp.StatusCode)))
+	if resp != nil && !satisfied {
+		err = fmt.Errorf("unexpected status code: %d", resp.StatusCode)
+		return
+	}
 	t = uint16(time.Since(start) / time.Millisecond)
 	return
 }

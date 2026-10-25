@@ -48,11 +48,11 @@ func defaultConfig(addr string) LC.AuthServer {
 	return LC.AuthServer{Enable: true, Listen: addr, AuthStore: authStore.Default}
 }
 
-func New(addr string, tunnel C.Tunnel, additions ...inbound.Addition) (*Listener, error) {
-	return NewWithConfig(defaultConfig(addr), inbound.NewListenConfig(), tunnel, additions...)
+func New(addr string, tunnel C.Tunnel, assoc *UDPAssoc, additions ...inbound.Addition) (*Listener, error) {
+	return NewWithConfig(defaultConfig(addr), inbound.NewListenConfig(), tunnel, assoc, additions...)
 }
 
-func NewWithConfig(config LC.AuthServer, lc C.InboundListenConfig, tunnel C.Tunnel, additions ...inbound.Addition) (*Listener, error) {
+func NewWithConfig(config LC.AuthServer, lc C.InboundListenConfig, tunnel C.Tunnel, assoc *UDPAssoc, additions ...inbound.Addition) (*Listener, error) {
 	isDefault := false
 	if len(additions) == 0 {
 		isDefault = true
@@ -141,14 +141,14 @@ func NewWithConfig(config LC.AuthServer, lc C.InboundListenConfig, tunnel C.Tunn
 					store = authStore.Nil
 				}
 			}
-			go handleSocks(c, tunnel, store, additions...)
+			go handleSocks(c, tunnel, store, assoc, additions...)
 		}
 	}()
 
 	return sl, nil
 }
 
-func handleSocks(conn net.Conn, tunnel C.Tunnel, store auth.AuthStore, additions ...inbound.Addition) {
+func handleSocks(conn net.Conn, tunnel C.Tunnel, store auth.AuthStore, assoc *UDPAssoc, additions ...inbound.Addition) {
 	bufConn := N.NewBufferedConn(conn)
 	head, err := bufConn.Peek(1)
 	if err != nil {
@@ -160,7 +160,7 @@ func handleSocks(conn net.Conn, tunnel C.Tunnel, store auth.AuthStore, additions
 	case socks4.Version:
 		HandleSocks4(bufConn, tunnel, store, additions...)
 	case socks5.Version:
-		HandleSocks5(bufConn, tunnel, store, additions...)
+		HandleSocks5(bufConn, tunnel, store, assoc, additions...)
 	default:
 		conn.Close()
 	}
@@ -177,7 +177,7 @@ func HandleSocks4(conn net.Conn, tunnel C.Tunnel, store auth.AuthStore, addition
 	tunnel.HandleTCPConn(inbound.NewSocket(socks5.ParseAddr(addr), conn, C.SOCKS4, additions...))
 }
 
-func HandleSocks5(conn net.Conn, tunnel C.Tunnel, store auth.AuthStore, additions ...inbound.Addition) {
+func HandleSocks5(conn net.Conn, tunnel C.Tunnel, store auth.AuthStore, assoc *UDPAssoc, additions ...inbound.Addition) {
 	authenticator := store.Authenticator()
 	target, command, user, err := socks5.ServerHandshake(conn, authenticator)
 	if err != nil {
@@ -186,6 +186,12 @@ func HandleSocks5(conn net.Conn, tunnel C.Tunnel, store auth.AuthStore, addition
 	}
 	if command == socks5.CmdUDPAssociate {
 		defer conn.Close()
+		if authenticator != nil && assoc != nil {
+			if ip := udpAssocIP(target, conn); ip != "" {
+				assoc.add(ip)
+				defer assoc.del(ip)
+			}
+		}
 		io.Copy(io.Discard, conn)
 		return
 	}

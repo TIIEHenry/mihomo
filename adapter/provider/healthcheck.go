@@ -67,8 +67,14 @@ func (hc *HealthCheck) setProxies(proxies []C.Proxy) {
 
 func (hc *HealthCheck) registerHealthCheckTask(url string, expectedStatus utils.IntRanges[uint16], filter string, interval uint) {
 	url = strings.TrimSpace(url)
-	if len(url) == 0 || url == hc.url {
+	if len(url) == 0 {
 		log.Debugln("ignore invalid health check url: %s", url)
+		return
+	}
+	if url == hc.url {
+		if expectedStatus != nil {
+			hc.expectedStatus = expectedStatus
+		}
 		return
 	}
 

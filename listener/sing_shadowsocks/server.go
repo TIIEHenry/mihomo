@@ -51,6 +51,10 @@ func New(config LC.ShadowsocksServer, lc C.InboundListenConfig, tunnel C.Tunnel,
 			inbound.WithSpecialRules(""),
 		}
 		defer func() {
+			if sl != nil && sl.closed {
+				_listener = nil
+				return
+			}
 			_listener = sl
 		}()
 	}
@@ -144,6 +148,7 @@ func New(config LC.ShadowsocksServer, lc C.InboundListenConfig, tunnel C.Tunnel,
 			//UDP
 			ul, err := lc.ListenPacket(context.Background(), "udp", addr)
 			if err != nil {
+				_ = sl.Close()
 				return nil, err
 			}
 
@@ -204,6 +209,7 @@ func New(config LC.ShadowsocksServer, lc C.InboundListenConfig, tunnel C.Tunnel,
 		//TCP
 		l, err := lc.Listen(context.Background(), "tcp", addr)
 		if err != nil {
+			_ = sl.Close()
 			return nil, err
 		}
 		if shadowTLSBuilder != nil {

@@ -431,10 +431,17 @@ func handleUDPConn(packet C.PacketAdapter) {
 	}
 	fixMetadata(metadata) // fix some metadata not set via metadata.SetRemoteAddr or metadata.SetRemoteAddress
 
+	preHandleFailed := false
 	if err := preHandleMetadata(metadata.Clone()); err != nil { // precheck without modify metadata
-		packet.Drop()
+		if sniffingEnable && snifferDispatcher.Enable() {
+			preHandleFailed = true
+		} else {
+			packet.Drop()
+		}
 		log.Debugln("[Metadata PreHandle] error: %s", err)
-		return
+		if !preHandleFailed {
+			return
+		}
 	}
 
 	key := packet.Key()
@@ -455,7 +462,13 @@ func handleUDPConn(packet C.PacketAdapter) {
 				return nil, nil, err
 			}
 
-			_ = preHandleMetadata(metadata) // error was pre-checked
+			if preHandleFailed {
+				if err := preHandleMetadata(metadata); err != nil {
+					return nil, nil, err
+				}
+			} else {
+				_ = preHandleMetadata(metadata) // error was pre-checked
+			}
 
 			proxy, rule, err := resolveMetadata(metadata)
 			if err != nil {

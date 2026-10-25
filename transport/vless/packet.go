@@ -29,6 +29,10 @@ func (c *PacketConn) ReadFrom(b []byte) (int, net.Addr, error) {
 		return 0, nil, err
 	}
 	if len(b) < int(length) {
+		_, err = io.CopyN(io.Discard, c.Conn, int64(length))
+		if err != nil {
+			return 0, nil, err
+		}
 		return 0, nil, io.ErrShortBuffer
 	}
 	n, err := io.ReadFull(c.Conn, b[:length])

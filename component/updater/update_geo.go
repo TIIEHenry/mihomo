@@ -67,11 +67,11 @@ func UpdateMMDB() (err error) {
 	}
 	_ = instance.Close()
 
-	defer mmdb.ReloadIP()
-	mmdb.IPInstance().Reader.Close() //  mmdb is loaded with mmap, so it needs to be closed before overwriting the file
 	if err = vehicle.Write(data); err != nil {
 		return fmt.Errorf("can't save MMDB database file: %w", err)
 	}
+	mmdb.IPInstance().Reader.Close()
+	mmdb.ReloadIP()
 	return nil
 }
 
@@ -98,11 +98,11 @@ func UpdateASN() (err error) {
 	}
 	_ = instance.Close()
 
-	defer mmdb.ReloadASN()
-	mmdb.ASNInstance().Reader.Close() //  mmdb is loaded with mmap, so it needs to be closed before overwriting the file
 	if err = vehicle.Write(data); err != nil {
 		return fmt.Errorf("can't save ASN database file: %w", err)
 	}
+	mmdb.ASNInstance().Reader.Close()
+	mmdb.ReloadASN()
 	return nil
 }
 

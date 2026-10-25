@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"unsafe"
 
 	"golang.org/x/exp/constraints"
 )
@@ -67,6 +68,13 @@ func newIntRange[T constraints.Integer](s string, parseFn func(string) (T, error
 	if len(s) == 0 {
 		return NewRange[T](0, 0), nil
 	}
+	if strings.HasPrefix(s, "-") && strings.Count(s, "-") == 1 {
+		value, err := parseFn(s)
+		if err != nil {
+			return Range[T]{}, fmt.Errorf("invalid range: %s", s)
+		}
+		return NewRange(value, value), nil
+	}
 	status := strings.Split(s, "-")
 	start, err := parseFn(strings.Trim(status[0], "[ ]"))
 	if err != nil {
@@ -87,7 +95,8 @@ func newIntRange[T constraints.Integer](s string, parseFn func(string) (T, error
 }
 
 func parseUnsigned[T constraints.Unsigned](s string) (T, error) {
-	if val, err := strconv.ParseUint(s, 10, 64); err == nil {
+	bitSize := int(unsafe.Sizeof(T(0))) * 8
+	if val, err := strconv.ParseUint(s, 10, bitSize); err == nil {
 		return T(val), nil
 	} else {
 		return 0, err
@@ -95,7 +104,8 @@ func parseUnsigned[T constraints.Unsigned](s string) (T, error) {
 }
 
 func parseSigned[T constraints.Signed](s string) (T, error) {
-	if val, err := strconv.ParseInt(s, 10, 64); err == nil {
+	bitSize := int(unsafe.Sizeof(T(0))) * 8
+	if val, err := strconv.ParseInt(s, 10, bitSize); err == nil {
 		return T(val), nil
 	} else {
 		return 0, err

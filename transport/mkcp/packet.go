@@ -56,7 +56,7 @@ func (w packetWriter) overhead() int {
 		}
 		return w.header.size()
 	}
-	overhead := w.security.Overhead()
+	overhead := w.security.NonceSize() + w.security.Overhead()
 	if w.header != nil {
 		overhead += w.header.size()
 	}

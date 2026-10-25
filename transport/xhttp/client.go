@@ -99,11 +99,11 @@ func (c *PacketUpWriter) flush() {
 		return
 	}
 	_, err := c.write(c.buf)
-	c.buf = c.buf[:0] // reset buffer
 	if err != nil {
 		c.flushErr = err
 		return
 	}
+	c.buf = c.buf[:0] // reset buffer
 }
 
 func (c *PacketUpWriter) write(b []byte) (int, error) {
@@ -119,7 +119,6 @@ func (c *PacketUpWriter) write(b []byte) (int, error) {
 	}
 
 	seqStr := strconv.FormatUint(c.seq, 10)
-	c.seq++
 
 	if err := c.cfg.FillPacketRequest(req, c.sessionID, seqStr, b); err != nil {
 		return 0, err
@@ -137,6 +136,7 @@ func (c *PacketUpWriter) write(b []byte) (int, error) {
 		return 0, fmt.Errorf("xhttp packet-up bad status: %s", resp.Status)
 	}
 
+	c.seq++
 	return len(b), nil
 }
 
@@ -149,10 +149,15 @@ func (c *PacketUpWriter) Close() error {
 	select {
 	case <-ch:
 	case <-time.After(time.Second):
+		c.cancel()
+		<-ch
 	}
 	c.cancel()
 	httputils.CloseTransport(c.transport)
-	return nil
+	c.writeMu.Lock()
+	err := c.flushErr
+	c.writeMu.Unlock()
+	return err
 }
 
 func NewTransport(dialRaw DialRawFunc, wrapTLS WrapTLSFunc, dialQUIC DialQUICFunc, alpn []string, keepAlivePeriod time.Duration) http.RoundTripper {

@@ -306,7 +306,7 @@ func (c *relayPacketConn) ReadFrom(p []byte) (int, net.Addr, error) {
 	if _, err := io.ReadFull(c.conn, buf); err != nil {
 		return 0, nil, err
 	}
-	return copy(p, buf), c.raddr, nil
+	return 0, nil, io.ErrShortBuffer
 }
 
 func (c *relayPacketConn) WriteTo(p []byte, addr net.Addr) (int, error) {

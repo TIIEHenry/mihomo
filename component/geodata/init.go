@@ -2,6 +2,7 @@ package geodata
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -77,6 +78,10 @@ func downloadToPath(url string, path string) (err error) {
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		return errors.New(resp.Status)
+	}
+
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY, 0o644)
 	if err != nil {
 		return err
@@ -108,6 +113,9 @@ func InitGeoSite() error {
 			if err := downloadToPath(GeoSiteUrl(), C.Path.GeoSite()); err != nil {
 				return fmt.Errorf("can't download GeoSite.dat: %s", err.Error())
 			}
+			if err := Verify(C.GeositeName); err != nil {
+				return fmt.Errorf("invalid GeoSite.dat: %s", err.Error())
+			}
 		}
 		initGeoSite = true
 	}
@@ -137,6 +145,9 @@ func InitGeoIP() error {
 				if err := downloadToPath(GeoIpUrl(), C.Path.GeoIP()); err != nil {
 					return fmt.Errorf("can't download GeoIP.dat: %s", err.Error())
 				}
+				if err := Verify(C.GeoipName); err != nil {
+					return fmt.Errorf("invalid GeoIP.dat: %s", err.Error())
+				}
 			}
 			initGeoIP = 1
 		}
@@ -158,6 +169,9 @@ func InitGeoIP() error {
 			}
 			if err := downloadToPath(MmdbUrl(), C.Path.MMDB()); err != nil {
 				return fmt.Errorf("can't download MMDB: %s", err.Error())
+			}
+			if !mmdb.Verify(C.Path.MMDB()) {
+				return fmt.Errorf("invalid MMDB")
 			}
 		}
 		initGeoIP = 2
@@ -185,6 +199,9 @@ func InitASN() error {
 			}
 			if err := downloadToPath(ASNUrl(), C.Path.ASN()); err != nil {
 				return fmt.Errorf("can't download ASN: %s", err.Error())
+			}
+			if !mmdb.Verify(C.Path.ASN()) {
+				return fmt.Errorf("invalid ASN")
 			}
 		}
 		initASN = true

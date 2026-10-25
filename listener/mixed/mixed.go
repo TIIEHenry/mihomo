@@ -45,11 +45,11 @@ func (l *Listener) Close() error {
 	return l.listener.Close()
 }
 
-func New(addr string, tunnel C.Tunnel, additions ...inbound.Addition) (*Listener, error) {
-	return NewWithConfig(LC.AuthServer{Enable: true, Listen: addr, AuthStore: authStore.Default}, inbound.NewListenConfig(), tunnel, additions...)
+func New(addr string, tunnel C.Tunnel, assoc *socks.UDPAssoc, additions ...inbound.Addition) (*Listener, error) {
+	return NewWithConfig(LC.AuthServer{Enable: true, Listen: addr, AuthStore: authStore.Default}, inbound.NewListenConfig(), tunnel, assoc, additions...)
 }
 
-func NewWithConfig(config LC.AuthServer, lc C.InboundListenConfig, tunnel C.Tunnel, additions ...inbound.Addition) (*Listener, error) {
+func NewWithConfig(config LC.AuthServer, lc C.InboundListenConfig, tunnel C.Tunnel, assoc *socks.UDPAssoc, additions ...inbound.Addition) (*Listener, error) {
 	isDefault := false
 	if len(additions) == 0 {
 		isDefault = true
@@ -138,14 +138,14 @@ func NewWithConfig(config LC.AuthServer, lc C.InboundListenConfig, tunnel C.Tunn
 					store = authStore.Nil
 				}
 			}
-			go handleConn(c, tunnel, store, additions...)
+			go handleConn(c, tunnel, store, assoc, additions...)
 		}
 	}()
 
 	return ml, nil
 }
 
-func handleConn(conn net.Conn, tunnel C.Tunnel, store auth.AuthStore, additions ...inbound.Addition) {
+func handleConn(conn net.Conn, tunnel C.Tunnel, store auth.AuthStore, assoc *socks.UDPAssoc, additions ...inbound.Addition) {
 	bufConn := N.NewBufferedConn(conn)
 	head, err := bufConn.Peek(1)
 	if err != nil {
@@ -157,7 +157,7 @@ func handleConn(conn net.Conn, tunnel C.Tunnel, store auth.AuthStore, additions 
 	case socks4.Version:
 		socks.HandleSocks4(bufConn, tunnel, store, additions...)
 	case socks5.Version:
-		socks.HandleSocks5(bufConn, tunnel, store, additions...)
+		socks.HandleSocks5(bufConn, tunnel, store, assoc, additions...)
 	default:
 		http.HandleConn(bufConn, tunnel, store, additions...)
 	}

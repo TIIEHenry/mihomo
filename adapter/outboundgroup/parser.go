@@ -118,6 +118,7 @@ func ParseProxyGroup(config map[string]any, proxyMap map[string]C.Proxy, provide
 		return nil, fmt.Errorf("%s: %w", groupName, errMissProxy)
 	}
 
+	rawExpectedStatus := strings.TrimSpace(groupOption.ExpectedStatus)
 	expectedStatus, err := utils.NewUnsignedRanges[uint16](groupOption.ExpectedStatus)
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", groupName, err)
@@ -148,6 +149,17 @@ func ParseProxyGroup(config map[string]any, proxyMap map[string]C.Proxy, provide
 			}
 		} else {
 			addTestUrlToProviders(PDs, groupOption.URL, expectedStatus, groupOption.Filter, uint(groupOption.Interval))
+		}
+		if rawExpectedStatus != "" {
+			groupStatus := expectedStatus
+			if groupStatus == nil {
+				groupStatus = utils.IntRanges[uint16]{}
+			}
+			for _, pd := range PDs {
+				if strings.TrimSpace(pd.HealthCheckURL()) == strings.TrimSpace(groupOption.URL) {
+					pd.RegisterHealthCheckTask(groupOption.URL, groupStatus, groupOption.Filter, uint(groupOption.Interval))
+				}
+			}
 		}
 		providers = append(providers, PDs...)
 	}

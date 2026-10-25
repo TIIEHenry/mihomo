@@ -26,10 +26,18 @@ func fragUDPMessage(m udpMessage, maxSize int) []udpMessage {
 	return frags
 }
 
-type defragger struct {
-	msgID uint16
+type fragKey struct {
+	SessionID uint32
+	MsgID     uint16
+}
+
+type fragSlot struct {
 	frags []*udpMessage
 	count uint8
+}
+
+type defragger struct {
+	slots map[fragKey]*fragSlot
 }
 
 func (d *defragger) Feed(m udpMessage) *udpMessage {
@@ -40,21 +48,31 @@ func (d *defragger) Feed(m udpMessage) *udpMessage {
 		// wtf is this?
 		return nil
 	}
-	if m.MsgID != d.msgID {
-		// new message, clear previous state
-		d.msgID = m.MsgID
-		d.frags = make([]*udpMessage, m.FragCount)
-		d.count = 1
-		d.frags[m.FragID] = &m
-	} else if d.frags[m.FragID] == nil {
-		d.frags[m.FragID] = &m
-		d.count++
-		if int(d.count) == len(d.frags) {
+	if d.slots == nil {
+		d.slots = make(map[fragKey]*fragSlot)
+	}
+	key := fragKey{SessionID: m.SessionID, MsgID: m.MsgID}
+	slot := d.slots[key]
+	if slot != nil && len(slot.frags) != int(m.FragCount) {
+		return nil
+	}
+	if slot == nil {
+		slot = &fragSlot{frags: make([]*udpMessage, m.FragCount)}
+		d.slots[key] = slot
+	}
+	if int(m.FragID) >= len(slot.frags) {
+		return nil
+	}
+	if slot.frags[m.FragID] == nil {
+		slot.frags[m.FragID] = &m
+		slot.count++
+		if int(slot.count) == len(slot.frags) {
 			// all fragments received, assemble
 			var data []byte
-			for _, frag := range d.frags {
+			for _, frag := range slot.frags {
 				data = append(data, frag.Data...)
 			}
+			delete(d.slots, key)
 			m.Data = data
 			m.FragID = 0
 			m.FragCount = 1

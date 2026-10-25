@@ -51,39 +51,65 @@ func (c *tls12TicketConn) Read(b []byte) (int, error) {
 
 	buf := pool.Get(pool.RelayBufferSize)
 	defer pool.Put(buf)
-	n, err := c.Conn.Read(buf)
-	if err != nil {
-		return 0, err
-	}
 
-	if c.handshakeStatus == 8 {
-		c.underDecoded.Write(buf[:n])
-		for c.underDecoded.Len() > 5 {
-			if !bytes.Equal(c.underDecoded.Bytes()[:3], []byte{0x17, 3, 3}) {
-				c.underDecoded.Reset()
-				return 0, errTLS12TicketAuthIncorrectMagicNumber
+	if c.handshakeStatus != 8 {
+		for {
+			n, err := c.Conn.Read(buf)
+			if n > 0 {
+				c.underDecoded.Write(buf[:n])
 			}
-			size := int(binary.BigEndian.Uint16(c.underDecoded.Bytes()[3:5]))
-			if c.underDecoded.Len() < 5+size {
-				break
+			raw := c.underDecoded.Bytes()
+			if len(raw) >= 43 {
+				if !hmac.Equal(raw[33:43], c.hmacSHA1(raw[11:33])[:10]) {
+					return 0, errTLS12TicketAuthHMACError
+				}
+				if l := c.tls12TicketHandshakeLen(raw); l > 0 {
+					c.underDecoded.Next(l)
+					c.Write(nil)
+					break
+				}
 			}
-			c.underDecoded.Next(5)
-			c.decoded.Write(c.underDecoded.Next(size))
+			if c.underDecoded.Len() > pool.RelayBufferSize {
+				return 0, errTLS12TicketAuthHMACError
+			}
+			if err != nil {
+				return 0, err
+			}
 		}
-		n, _ = c.decoded.Read(b)
-		return n, nil
+	} else {
+		n, err := c.Conn.Read(buf)
+		if err != nil {
+			return 0, err
+		}
+		c.underDecoded.Write(buf[:n])
 	}
 
-	if n < 11+32+1+32 {
-		return 0, errTLS12TicketAuthTooShortData
+	for c.underDecoded.Len() > 5 {
+		if !bytes.Equal(c.underDecoded.Bytes()[:3], []byte{0x17, 3, 3}) {
+			c.underDecoded.Reset()
+			return 0, errTLS12TicketAuthIncorrectMagicNumber
+		}
+		size := int(binary.BigEndian.Uint16(c.underDecoded.Bytes()[3:5]))
+		if c.underDecoded.Len() < 5+size {
+			break
+		}
+		c.underDecoded.Next(5)
+		c.decoded.Write(c.underDecoded.Next(size))
 	}
+	n, _ := c.decoded.Read(b)
+	return n, nil
+}
 
-	if !hmac.Equal(buf[33:43], c.hmacSHA1(buf[11:33])[:10]) || !hmac.Equal(buf[n-10:n], c.hmacSHA1(buf[:n-10])[:10]) {
-		return 0, errTLS12TicketAuthHMACError
+func (c *tls12TicketConn) tls12TicketHandshakeLen(buf []byte) int {
+	if len(buf) < 11+32+1+32 {
+		return 0
 	}
-
-	c.Write(nil)
-	return 0, nil
+	for l := 11 + 32 + 1 + 32; l <= len(buf); l++ {
+		if hmac.Equal(buf[l-10:l], c.hmacSHA1(buf[:l-10])[:10]) {
+			return l
+		}
+	}
+	return 0
 }
 
 func (c *tls12TicketConn) Write(b []byte) (int, error) {

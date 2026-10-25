@@ -3,11 +3,14 @@ package socks
 import (
 	"context"
 	"net"
+	"sync"
 
 	"github.com/metacubex/mihomo/adapter/inbound"
 	N "github.com/metacubex/mihomo/common/net"
 	"github.com/metacubex/mihomo/common/sockopt"
+	"github.com/metacubex/mihomo/component/auth"
 	C "github.com/metacubex/mihomo/constant"
+	authStore "github.com/metacubex/mihomo/listener/auth"
 	LC "github.com/metacubex/mihomo/listener/config"
 	"github.com/metacubex/mihomo/log"
 	"github.com/metacubex/mihomo/transport/socks5"
@@ -35,12 +38,14 @@ func (l *UDPListener) Close() error {
 	return l.packetConn.Close()
 }
 
-func NewUDP(addr string, tunnel C.Tunnel, additions ...inbound.Addition) (*UDPListener, error) {
-	return NewUDPWithConfig(defaultConfig(addr), inbound.NewListenConfig(), tunnel, additions...)
+func NewUDP(addr string, tunnel C.Tunnel, assoc *UDPAssoc, additions ...inbound.Addition) (*UDPListener, error) {
+	return NewUDPWithConfig(defaultConfig(addr), inbound.NewListenConfig(), tunnel, assoc, additions...)
 }
 
-func NewUDPWithConfig(config LC.AuthServer, lc C.InboundListenConfig, tunnel C.Tunnel, additions ...inbound.Addition) (*UDPListener, error) {
+func NewUDPWithConfig(config LC.AuthServer, lc C.InboundListenConfig, tunnel C.Tunnel, assoc *UDPAssoc, additions ...inbound.Addition) (*UDPListener, error) {
+	isDefault := false
 	if len(additions) == 0 {
+		isDefault = true
 		additions = []inbound.Addition{
 			inbound.WithInName("DEFAULT-SOCKS"),
 			inbound.WithSpecialRules(""),
@@ -60,6 +65,7 @@ func NewUDPWithConfig(config LC.AuthServer, lc C.InboundListenConfig, tunnel C.T
 		addr:       config.Listen,
 	}
 	conn := N.NewEnhancePacketConn(l)
+	store := config.AuthStore
 	go func() {
 		for {
 			data, put, remoteAddr, err := conn.WaitReadFrom()
@@ -72,14 +78,14 @@ func NewUDPWithConfig(config LC.AuthServer, lc C.InboundListenConfig, tunnel C.T
 				}
 				continue
 			}
-			handleSocksUDP(l, tunnel, data, put, remoteAddr, additions...)
+			handleSocksUDP(l, tunnel, data, put, remoteAddr, assoc, store, isDefault, additions...)
 		}
 	}()
 
 	return sl, nil
 }
 
-func handleSocksUDP(pc net.PacketConn, tunnel C.Tunnel, buf []byte, put func(), addr net.Addr, additions ...inbound.Addition) {
+func handleSocksUDP(pc net.PacketConn, tunnel C.Tunnel, buf []byte, put func(), addr net.Addr, assoc *UDPAssoc, store auth.AuthStore, isDefault bool, additions ...inbound.Addition) {
 	target, payload, err := socks5.DecodeUDPPacket(buf)
 	if err != nil {
 		// Unresolved UDP packet, return buffer to the pool
@@ -88,6 +94,15 @@ func handleSocksUDP(pc net.PacketConn, tunnel C.Tunnel, buf []byte, put func(), 
 		}
 		return
 	}
+	if store != nil && store.Authenticator() != nil && !((isDefault || store == authStore.Default) && inbound.SkipAuthRemoteAddr(addr)) {
+		ip := ipKey(addrIP(addr))
+		if ip == "" || assoc == nil || !assoc.has(ip) {
+			if put != nil {
+				put()
+			}
+			return
+		}
+	}
 	packet := &packet{
 		pc:      pc,
 		rAddr:   addr,
@@ -95,4 +110,70 @@ func handleSocksUDP(pc net.PacketConn, tunnel C.Tunnel, buf []byte, put func(), 
 		put:     put,
 	}
 	tunnel.HandleUDPPacket(inbound.NewPacket(target, packet, C.SOCKS5, additions...))
+}
+
+type UDPAssoc struct {
+	mu sync.Mutex
+	n  map[string]int
+}
+
+func NewUDPAssoc() *UDPAssoc {
+	return &UDPAssoc{n: make(map[string]int)}
+}
+
+func (a *UDPAssoc) add(ip string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.n[ip]++
+}
+
+func (a *UDPAssoc) del(ip string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.n[ip] <= 1 {
+		delete(a.n, ip)
+		return
+	}
+	a.n[ip]--
+}
+
+func (a *UDPAssoc) has(ip string) bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.n[ip] > 0
+}
+
+func udpAssocIP(target socks5.Addr, conn net.Conn) string {
+	if len(target) > 0 && target[0] == socks5.AtypDomainName {
+		return ""
+	}
+	if udpAddr := target.UDPAddr(); udpAddr != nil && len(udpAddr.IP) > 0 && !udpAddr.IP.IsUnspecified() {
+		return ipKey(udpAddr.IP)
+	}
+	return ipKey(addrIP(conn.RemoteAddr()))
+}
+
+func addrIP(addr net.Addr) net.IP {
+	switch a := addr.(type) {
+	case *net.TCPAddr:
+		return a.IP
+	case *net.UDPAddr:
+		return a.IP
+	default:
+		host, _, err := net.SplitHostPort(addr.String())
+		if err != nil {
+			return net.ParseIP(addr.String())
+		}
+		return net.ParseIP(host)
+	}
+}
+
+func ipKey(ip net.IP) string {
+	if ip == nil {
+		return ""
+	}
+	if ip4 := ip.To4(); ip4 != nil {
+		return ip4.String()
+	}
+	return ip.String()
 }
