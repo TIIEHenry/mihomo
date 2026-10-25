@@ -72,9 +72,14 @@ func (hc *HealthCheck) registerHealthCheckTask(url string, expectedStatus utils.
 		return
 	}
 	if url == hc.url {
-		if expectedStatus != nil {
-			hc.expectedStatus = expectedStatus
+		// nil and an explicit "*" are an empty range, and an empty range matches
+		// every status. Either one would widen a provider status that is already set.
+		if len(expectedStatus) == 0 {
+			return
 		}
+		hc.mu.Lock()
+		hc.expectedStatus = append(utils.IntRanges[uint16](nil), expectedStatus...)
+		hc.mu.Unlock()
 		return
 	}
 
@@ -118,6 +123,12 @@ func splitAndAddFiltersToExtra(filter string, option *extraOption) {
 	}
 }
 
+func (hc *HealthCheck) defaultExpectedStatus() utils.IntRanges[uint16] {
+	hc.mu.Lock()
+	defer hc.mu.Unlock()
+	return append(utils.IntRanges[uint16](nil), hc.expectedStatus...)
+}
+
 func (hc *HealthCheck) auto() bool {
 	return hc.interval != 0
 }
@@ -138,7 +149,7 @@ func (hc *HealthCheck) check() {
 		b.SetLimit(10)
 
 		// execute default health check
-		option := &extraOption{filters: nil, expectedStatus: hc.expectedStatus}
+		option := &extraOption{filters: nil, expectedStatus: hc.defaultExpectedStatus()}
 		hc.execute(b, hc.url, id, option)
 
 		// execute extra health check

@@ -187,10 +187,7 @@ func HandleSocks5(conn net.Conn, tunnel C.Tunnel, store auth.AuthStore, assoc *U
 	if command == socks5.CmdUDPAssociate {
 		defer conn.Close()
 		if authenticator != nil && assoc != nil {
-			if ip := udpAssocIP(target, conn); ip != "" {
-				assoc.add(ip)
-				defer assoc.del(ip)
-			}
+			defer trackUDPAssoc(target, conn, assoc)()
 		}
 		io.Copy(io.Discard, conn)
 		return

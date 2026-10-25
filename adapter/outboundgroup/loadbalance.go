@@ -246,15 +246,17 @@ func strategyStickySessions(url string, keyOf keyFn) strategyFn {
 		key := utils.MapHash(keyOf(metadata))
 		length := len(proxies)
 		idx, has := lruCache.Get(key)
-		if !has || idx >= length {
+		if !has || idx < 0 || idx >= length {
 			idx = int(jumpHash(key+uint64(time.Now().UnixNano()), int32(length)))
+			has = false
 		}
 
 		nowIdx := idx
 		for i := 1; i < maxRetry; i++ {
 			proxy := proxies[nowIdx]
 			if proxy.AliveForTestUrl(url) && (!udp || proxy.SupportUDP()) {
-				if !udp && (!has || nowIdx != idx) {
+				// Store a miss. A UDP packet must not replace a pin that is already there.
+				if !has || (!udp && nowIdx != idx) {
 					lruCache.Set(key, nowIdx)
 				}
 
@@ -265,8 +267,11 @@ func strategyStickySessions(url string, keyOf keyFn) strategyFn {
 		}
 
 		if udp {
-			for _, proxy := range proxies {
+			for i, proxy := range proxies {
 				if proxy.AliveForTestUrl(url) && proxy.SupportUDP() {
+					if !has {
+						lruCache.Set(key, i)
+					}
 					return proxy
 				}
 			}

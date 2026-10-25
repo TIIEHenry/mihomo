@@ -71,6 +71,10 @@ func (c *httpConn) Read(b []byte) (int, error) {
 				return n, nil
 			}
 		}
+		// io.Reader may return (0, nil). Waiting on that result spins this goroutine.
+		if n == 0 && err == nil {
+			return 0, errors.New("http_simple empty read")
+		}
 		if total >= pool.RelayBufferSize {
 			return 0, errors.New("http_simple header too long")
 		}

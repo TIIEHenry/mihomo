@@ -138,3 +138,45 @@ func TestLoadBalanceHashKeyRejectsUnusableConfigs(t *testing.T) {
 		LoadBalanceOption{Strategy: "consistent-hashing", HashKey: "nonsense"}, nil, nil)
 	require.ErrorIs(t, err, errHashKey)
 }
+
+type udpToggle struct {
+	C.Proxy
+	udp bool
+}
+
+func (p *udpToggle) SupportUDP() bool { return p.udp }
+
+func toggledProxies(count int) ([]C.Proxy, []*udpToggle) {
+	proxies := make([]C.Proxy, 0, count)
+	toggles := make([]*udpToggle, 0, count)
+	for i := 0; i < count; i++ {
+		item := &udpToggle{Proxy: adapter.NewProxy(outbound.NewDirect()), udp: true}
+		toggles = append(toggles, item)
+		proxies = append(proxies, item)
+	}
+	return proxies, toggles
+}
+
+func TestStickySessionsUDPStoresAMiss(t *testing.T) {
+	proxies, _ := toggledProxies(8)
+	strategy := strategyStickySessions(testUrl, getKeyWithSrcAndDst)
+	meta := request("", "udp.example.com")
+	first := indexOf(t, proxies, strategy(proxies, meta, false, true))
+	for i := 0; i < 20; i++ {
+		require.Equal(t, first, indexOf(t, proxies, strategy(proxies, meta, false, true)))
+	}
+}
+
+func TestStickySessionsUDPDoesNotReplaceATCPPin(t *testing.T) {
+	proxies, toggles := toggledProxies(8)
+	strategy := strategyStickySessions(testUrl, getKeyWithSrcAndDst)
+	meta := request("", "pinned.example.com")
+	pinned := indexOf(t, proxies, strategy(proxies, meta, false, false))
+	toggles[pinned].udp = false
+	for i := 0; i < 20; i++ {
+		selected := strategy(proxies, meta, false, true)
+		require.NotNil(t, selected)
+		require.NotEqual(t, pinned, indexOf(t, proxies, selected))
+	}
+	require.Equal(t, pinned, indexOf(t, proxies, strategy(proxies, meta, false, false)))
+}

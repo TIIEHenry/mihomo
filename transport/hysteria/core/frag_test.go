@@ -3,6 +3,7 @@ package core
 import (
 	"reflect"
 	"testing"
+	"time"
 )
 
 func Test_fragUDPMessage(t *testing.T) {
@@ -336,17 +337,100 @@ func Test_defragger_Feed(t *testing.T) {
 		}
 	})
 
-	t.Run("frag count grows", func(t *testing.T) {
+	t.Run("frag count replaces the slot", func(t *testing.T) {
 		gd := &defragger{}
 		if got := gd.Feed(udpMessage{SessionID: 1, MsgID: 2, FragID: 0, FragCount: 2, Data: []byte("a")}); got != nil {
 			t.Fatalf("first = %v", got)
 		}
-		if got := gd.Feed(udpMessage{SessionID: 1, MsgID: 2, FragID: 2, FragCount: 4, Data: []byte("b")}); got != nil {
-			t.Fatalf("larger = %v", got)
+		if got := gd.Feed(udpMessage{SessionID: 1, MsgID: 2, FragID: 0, FragCount: 3, Data: []byte("x")}); got != nil {
+			t.Fatalf("replaced = %v", got)
 		}
-		got := gd.Feed(udpMessage{SessionID: 1, MsgID: 2, FragID: 1, FragCount: 2, Data: []byte("b")})
+		if got := gd.Feed(udpMessage{SessionID: 1, MsgID: 2, FragID: 1, FragCount: 3, Data: []byte("y")}); got != nil {
+			t.Fatalf("middle = %v", got)
+		}
+		got := gd.Feed(udpMessage{SessionID: 1, MsgID: 2, FragID: 2, FragCount: 3, Data: []byte("z")})
+		if got == nil || string(got.Data) != "xyz" {
+			t.Fatalf("assembled = %v", got)
+		}
+	})
+
+	t.Run("msgid reuse drops the old payload", func(t *testing.T) {
+		rd := &defragger{}
+		if got := rd.Feed(udpMessage{SessionID: 1, MsgID: 9, FragID: 0, FragCount: 2, Data: []byte("a")}); got != nil {
+			t.Fatalf("first = %v", got)
+		}
+		if got := rd.Feed(udpMessage{SessionID: 1, MsgID: 9, FragID: 0, FragCount: 2, Data: []byte("c")}); got != nil {
+			t.Fatalf("reused = %v", got)
+		}
+		got := rd.Feed(udpMessage{SessionID: 1, MsgID: 9, FragID: 1, FragCount: 2, Data: []byte("d")})
+		if got == nil || string(got.Data) != "cd" {
+			t.Fatalf("assembled = %v", got)
+		}
+	})
+
+	t.Run("duplicate fragment keeps the slot", func(t *testing.T) {
+		dd := &defragger{}
+		if got := dd.Feed(udpMessage{SessionID: 1, MsgID: 4, FragID: 0, FragCount: 2, Data: []byte("a")}); got != nil {
+			t.Fatalf("first = %v", got)
+		}
+		if got := dd.Feed(udpMessage{SessionID: 1, MsgID: 4, FragID: 0, FragCount: 2, Data: []byte("a")}); got != nil {
+			t.Fatalf("dup = %v", got)
+		}
+		got := dd.Feed(udpMessage{SessionID: 1, MsgID: 4, FragID: 1, FragCount: 2, Data: []byte("b")})
 		if got == nil || string(got.Data) != "ab" {
-			t.Fatalf("kept = %v", got)
+			t.Fatalf("assembled = %v", got)
+		}
+	})
+
+	t.Run("expired slot does not block the msgid", func(t *testing.T) {
+		at := time.Unix(1_700_000_000, 0)
+		ed := &defragger{now: func() time.Time { return at }}
+		if got := ed.Feed(udpMessage{SessionID: 1, MsgID: 7, FragID: 0, FragCount: 2, Data: []byte("a")}); got != nil {
+			t.Fatalf("first = %v", got)
+		}
+		at = at.Add(fragSlotTTL + time.Second)
+		if got := ed.Feed(udpMessage{SessionID: 1, MsgID: 7, FragID: 1, FragCount: 2, Data: []byte("b")}); got != nil {
+			t.Fatalf("expired half assembled: %v", got)
+		}
+		got := ed.Feed(udpMessage{SessionID: 1, MsgID: 7, FragID: 0, FragCount: 2, Data: []byte("c")})
+		if got == nil || string(got.Data) != "cb" {
+			t.Fatalf("reassembled = %v", got)
+		}
+	})
+
+	t.Run("unfragmented packet expires a stale slot", func(t *testing.T) {
+		at := time.Unix(1_700_000_000, 0)
+		ed := &defragger{now: func() time.Time { return at }}
+		if got := ed.Feed(udpMessage{SessionID: 1, MsgID: 3, FragID: 0, FragCount: 2, Data: []byte("a")}); got != nil {
+			t.Fatalf("first = %v", got)
+		}
+		at = at.Add(fragSlotTTL + time.Second)
+		got := ed.Feed(udpMessage{SessionID: 1, MsgID: 8, FragCount: 1, Data: []byte("plain")})
+		if got == nil || string(got.Data) != "plain" {
+			t.Fatalf("plain = %v", got)
+		}
+		if len(ed.slots) != 0 {
+			t.Fatalf("slots = %d", len(ed.slots))
+		}
+	})
+
+	t.Run("slot cap drops the oldest incomplete message", func(t *testing.T) {
+		cd := &defragger{}
+		for i := 0; i < maxFragSlots; i++ {
+			got := cd.Feed(udpMessage{SessionID: uint32(i), MsgID: 1, FragID: 0, FragCount: 2, Data: []byte{byte(i)}})
+			if got != nil {
+				t.Fatalf("slot %d = %v", i, got)
+			}
+		}
+		if got := cd.Feed(udpMessage{SessionID: uint32(maxFragSlots), MsgID: 1, FragID: 0, FragCount: 2, Data: []byte("n")}); got != nil {
+			t.Fatalf("overflow = %v", got)
+		}
+		if len(cd.slots) > maxFragSlots {
+			t.Fatalf("slots = %d", len(cd.slots))
+		}
+		got := cd.Feed(udpMessage{SessionID: 0, MsgID: 1, FragID: 1, FragCount: 2, Data: []byte("Z")})
+		if got != nil {
+			t.Fatalf("evicted slot reassembled: %q", got.Data)
 		}
 	})
 }

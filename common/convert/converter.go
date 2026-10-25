@@ -573,10 +573,9 @@ func ConvertsV2Ray(buf []byte) ([]map[string]any, error) {
 					username = user.Username()
 					password = pass
 				} else if userName := user.Username(); userName != "" {
-					parts := strings.Split(string(DecodeBase64([]byte(userName))), ":")
-					if len(parts) == 2 && parts[0] != "" && parts[1] != "" {
-						username = parts[0]
-						password = parts[1]
+					if user, pass, ok := decodeEncodedUserinfo(userName); ok {
+						username = user
+						password = pass
 					} else {
 						username = userName
 					}
@@ -740,4 +739,42 @@ func uniqueName(names map[string]int, name string) string {
 	}
 	names[name] = 0
 	return name
+}
+
+// decodeEncodedUserinfo reads base64(user) and base64(user:password).
+// Ordinary names are valid raw base64, so a token is decoded only when it
+// carries a base64 marker and the result is printable ASCII.
+func decodeEncodedUserinfo(token string) (user, pass string, ok bool) {
+	if len(token) < 4 || !userinfoLooksEncoded(token) {
+		return "", "", false
+	}
+	buf, err := tryDecodeBase64([]byte(token))
+	if err != nil || !printableASCII(buf) {
+		return "", "", false
+	}
+	decoded := string(buf)
+	user, pass, _ = strings.Cut(decoded, ":")
+	return user, pass, true
+}
+
+func userinfoLooksEncoded(token string) bool {
+	for i := 0; i < len(token); i++ {
+		c := token[i]
+		if c >= 'A' && c <= 'Z' || c == '+' || c == '/' || c == '=' {
+			return true
+		}
+	}
+	return false
+}
+
+func printableASCII(buf []byte) bool {
+	if len(buf) == 0 {
+		return false
+	}
+	for _, b := range buf {
+		if b < 0x20 || b >= 0x7f {
+			return false
+		}
+	}
+	return true
 }

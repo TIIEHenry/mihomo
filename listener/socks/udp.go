@@ -143,14 +143,41 @@ func (a *UDPAssoc) has(ip string) bool {
 	return a.n[ip] > 0
 }
 
-func udpAssocIP(target socks5.Addr, conn net.Conn) string {
-	if len(target) > 0 && target[0] == socks5.AtypDomainName {
-		return ""
+// udpAssocKeys lists the source addresses an authenticated UDP ASSOCIATE may
+// send from. The TCP peer is always allowed. A concrete address in the request
+// is allowed as well when it differs from that peer. A domain, or an
+// unspecified address, does not name a source, so only the peer is used.
+func udpAssocKeys(target socks5.Addr, conn net.Conn) []string {
+	peer := ""
+	if conn != nil && conn.RemoteAddr() != nil {
+		peer = ipKey(addrIP(conn.RemoteAddr()))
 	}
-	if udpAddr := target.UDPAddr(); udpAddr != nil && len(udpAddr.IP) > 0 && !udpAddr.IP.IsUnspecified() {
-		return ipKey(udpAddr.IP)
+	declared := ""
+	if len(target) == 0 || target[0] != socks5.AtypDomainName {
+		if udpAddr := target.UDPAddr(); udpAddr != nil && len(udpAddr.IP) > 0 && !udpAddr.IP.IsUnspecified() {
+			declared = ipKey(udpAddr.IP)
+		}
 	}
-	return ipKey(addrIP(conn.RemoteAddr()))
+	keys := make([]string, 0, 2)
+	if peer != "" {
+		keys = append(keys, peer)
+	}
+	if declared != "" && declared != peer {
+		keys = append(keys, declared)
+	}
+	return keys
+}
+
+func trackUDPAssoc(target socks5.Addr, conn net.Conn, assoc *UDPAssoc) func() {
+	keys := udpAssocKeys(target, conn)
+	for _, ip := range keys {
+		assoc.add(ip)
+	}
+	return func() {
+		for _, ip := range keys {
+			assoc.del(ip)
+		}
+	}
 }
 
 func addrIP(addr net.Addr) net.IP {

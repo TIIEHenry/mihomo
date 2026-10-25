@@ -2,6 +2,7 @@ package convert_test
 
 import (
 	"encoding/base64"
+	"net/url"
 	"testing"
 
 	"github.com/metacubex/mihomo/adapter"
@@ -328,4 +329,39 @@ func TestConvertsV2RayVmessBase64HTTPRemappedToH2Transport(t *testing.T) {
 
 	_, err = adapter.ParseProxy(proxies[0])
 	assert.NoError(t, err)
+}
+
+func TestConvertsV2RaySocksUserinfo(t *testing.T) {
+	userinfo := func(raw string) string {
+		return url.PathEscape(base64.StdEncoding.EncodeToString([]byte(raw)))
+	}
+	tests := []struct {
+		name, link, user, pass string
+	}{
+		{"literal", "socks://alice:secret@127.0.0.1:1080#literal", "alice", "secret"},
+		{"literal extra colon", "socks://alice:secret:with:colon@127.0.0.1:1080#extra", "alice", "secret:with:colon"},
+		{"base64 user", "socks://" + userinfo("alice") + "@127.0.0.1:1080#b64user", "alice", ""},
+		{"base64 empty password", "socks://" + userinfo("alice:") + "@127.0.0.1:1080#b64empty", "alice", ""},
+		{"base64 password colon", "socks://" + userinfo("alice:secret:with:colon") + "@127.0.0.1:1080#b64colon", "alice", "secret:with:colon"},
+		{"plain", "http://plain_user@127.0.0.1:8080#plain", "plain_user", ""},
+		{"literal user", "http://user@127.0.0.1:8080#user", "user", ""},
+		{"literal password", "socks://password@127.0.0.1:1080#password", "password", ""},
+		{"literal ajo", "socks://ajo@127.0.0.1:1080#ajo", "ajo", ""},
+		{"literal User", "socks://User@127.0.0.1:1080#User", "User", ""},
+		{"literal root", "socks://root@127.0.0.1:1080#root", "root", ""},
+		{"literal test", "http://test@127.0.0.1:8080#test", "test", ""},
+		{"literal admin1", "socks://admin1@127.0.0.1:1080#admin1", "admin1", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			proxies, err := ConvertsV2Ray([]byte(tt.link))
+			if !assert.NoError(t, err) || !assert.Len(t, proxies, 1) {
+				return
+			}
+			assert.Equal(t, tt.user, proxies[0]["username"])
+			assert.Equal(t, tt.pass, proxies[0]["password"])
+			_, err = adapter.ParseProxy(proxies[0])
+			assert.NoError(t, err)
+		})
+	}
 }

@@ -151,13 +151,11 @@ func ParseProxyGroup(config map[string]any, proxyMap map[string]C.Proxy, provide
 			addTestUrlToProviders(PDs, groupOption.URL, expectedStatus, groupOption.Filter, uint(groupOption.Interval))
 		}
 		if rawExpectedStatus != "" {
-			groupStatus := expectedStatus
-			if groupStatus == nil {
-				groupStatus = utils.IntRanges[uint16]{}
-			}
+			// "*" parses as nil. Pass that through. An empty range matches every
+			// status, so substituting one here would wipe a narrower provider status.
 			for _, pd := range PDs {
 				if strings.TrimSpace(pd.HealthCheckURL()) == strings.TrimSpace(groupOption.URL) {
-					pd.RegisterHealthCheckTask(groupOption.URL, groupStatus, groupOption.Filter, uint(groupOption.Interval))
+					pd.RegisterHealthCheckTask(groupOption.URL, expectedStatus, groupOption.Filter, uint(groupOption.Interval))
 				}
 			}
 		}
